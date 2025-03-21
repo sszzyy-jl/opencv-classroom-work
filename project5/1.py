@@ -1,42 +1,50 @@
 import cv2
 import numpy as np
+from matplotlib import pyplot as plt
 
-# 读取待处理图片文件
-img = cv2.imread('1.png')
+# 读取两幅图像，假设为left和right
+left = cv2.imread('image.jpg')
+right = cv2.imread('image3.jpg')
 
-# 将图片转为灰度图像
-gray_img = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+# 初始化SIFT检测器并提取特征点和特征描述符
+sift = cv2.SIFT_create()
+keypoints_left, descriptors_left = sift.detectAndCompute(left, None)
+keypoints_right, descriptors_right = sift.detectAndCompute(right, None)
 
-# 检测边缘，使用Canny算子
-edges = cv2.Canny(gray_img,50,150,apertureSize = 3)
+# 利用BFMatcher算法进行特征点匹配
+matcher = cv2.BFMatcher()
+matches = matcher.match(descriptors_left, descriptors_right)
 
-# 寻找轮廓
-contours,hierarchy = cv2.findContours(edges,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
+# 根据SRNSAC随机采样一致算法筛选出最优的特征匹配点对
+src_pts = np.float32([keypoints_left[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+dst_pts = np.float32([keypoints_right[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 10.0)
 
-# 找到最大轮廓
-max_area = 0
-max_cnt = None
-for cnt in contours:
-    area = cv2.contourArea(cnt)
-    if area > max_area:
-        max_area = area
-        max_cnt = cnt
+# 利用得到的投影映射矩阵计算变换后的左侧图像
+h, w = left.shape[:2]
+pts_left = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
+pts_right = cv2.perspectiveTransform(pts_left, M)
+pts = np.concatenate((pts_left, pts_right), axis=0)
+[x_min, y_min] = np.int32(pts.min(axis=0).ravel() - 0.5)
+[x_max, y_max] = np.int32(pts.max(axis=0).ravel() + 0.5)
+t = [-x_min, -y_min]
+transform_matrix = np.array([[1, 0, t[0]], [0, 1, t[1]], [0, 0, 1]])
+result = cv2.warpPerspective(left, transform_matrix.dot(M), (x_max - x_min, y_max - y_min))
 
-# 获取顶点坐标，并绘制矩形框
-rect = cv2.minAreaRect(max_cnt)
-points = cv2.boxPoints(rect)
-points = np.int32(points)
-cv2.drawContours(img,[points],0,(0,0,255),2)
+# 将两幅图像进行拼接
+#result[t[1]:h+t[1], t[0]:w+t[0]] = right
 
-# 计算目标大小、位置，并进行透视变换
-width = int(rect[1][0])
-height = int(rect[1][1])
-src_pts = np.float32(points)
-dst_pts = np.array([[0, 0], [width-1, 0], [width-1, height-1], [0, height-1]], dtype=np.float32)
-M = cv2.getPerspectiveTransform(src_pts, dst_pts)
-warped = cv2.warpPerspective(img, M, (width, height))
+# 显示拼接结果并保存到文件中
+#cv2.imshow('result', result)
+#cv2.imwrite('result.jpg', result)
 
-# 显示结果
-cv2.imshow('Original Image', img)
-cv2.imshow('Warped Image', warped)
-cv2.waitKey(0)
+#等待用户按下任意键退出
+#cv2.waitKey(0)
+#cv2.destroyAllWindows()
+h, w =left.shape[:2]
+aligned_image = cv2.warpPerspective(left, M, (w + right.shape[1], h))
+aligned_image[0:right.shape[0], 0:right.shape[1]] = right
+
+# 显示拼接结果。
+plt.imshow(cv2.cvtColor(aligned_image, cv2.COLOR_BGR2RGB))
+plt.show()
